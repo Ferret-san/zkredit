@@ -4,37 +4,114 @@ import {
   state,
   State,
   method,
+  isReady,
   DeployArgs,
   Permissions,
+  Poseidon,
+  CircuitValue,
+  arrayProp,
+  Mina,
+  Party,
+  PrivateKey,
+  PublicKey
 } from 'snarkyjs';
 
-/**
- * 1. ID or proof of personhood?
- * 2. Credit score.
- * 3. Proof of income.
- */
-export class MortgageZkApp extends SmartContract {
-  // 
-  @state(Field) creditScore = State<Field>();
-  @state(Field) num = State<Field>();
+export { deploy, submitCreditProofs, createLocalBlockchain, IncomeHistory };
 
-  deploy(args: DeployArgs) {
-    super.deploy(args);
-    this.setPermissions({
+await isReady;
+
+class IncomeHistory extends CircuitValue {
+  @arrayProp(Field, 24) value: Field[];
+
+  constructor(value: number[]) {
+    super();
+    this.value = value.map((row) => Field(row));
+  }
+
+  hash() {
+    return Poseidon.hash(this.value.flat());
+  }
+}
+
+// NOTE: Add events and use them in the test
+export class MortgageZkApp extends SmartContract {
+  @state(Field) minCreditScore = State<Field>();
+  @state(Field) monthlyIncomeReq = State<Field>();
+
+  @method init(minCreditScore: Field, monthlyIncomeReq: Field) {
+    this.minCreditScore.set(minCreditScore);
+    this.monthlyIncomeReq.set(monthlyIncomeReq);
+  }
+
+  @method submitCreditProofs(creditScore: Field, incomeHistory: IncomeHistory) {
+    this.submitCreditScore(creditScore);
+    this.submitIncomeProof(incomeHistory);
+  }
+
+  @method submitCreditScore(creditScore: Field) {
+    let minCreditScore = this.minCreditScore.get();
+    this.minCreditScore.assertEquals(minCreditScore);
+    creditScore.assertGte(minCreditScore);
+  }
+
+  @method submitIncomeProof(incomeHistory: IncomeHistory) {
+    let monthlyIncomeReq = this.monthlyIncomeReq.get();
+    this.monthlyIncomeReq.assertEquals(monthlyIncomeReq);
+    for (let i = 0; i < 24; i++) {
+      incomeHistory.value[i].assertGte(monthlyIncomeReq);
+    }
+  }
+}
+
+// helpers
+function createLocalBlockchain(): PrivateKey {
+  let Local = Mina.LocalBlockchain();
+  Mina.setActiveInstance(Local);
+
+  const account = Local.testAccounts[0].privateKey;
+  return account;
+}
+
+async function deploy(
+  zkAppInstance: MortgageZkApp,
+  zkAppPrivateKey: PrivateKey,
+  minCreditScore: Field,
+  monthlyIncomeReq: Field,
+  account: PrivateKey
+) {
+  let tx = await Mina.transaction(account, () => {
+    Party.fundNewAccount(account);
+
+    zkAppInstance.deploy({ zkappKey: zkAppPrivateKey });
+    zkAppInstance.setPermissions({
       ...Permissions.default(),
       editState: Permissions.proofOrSignature(),
     });
-  }
 
-  @method init() {
-    this.num.set(Field(1));
-  }
+    zkAppInstance.init(minCreditScore, monthlyIncomeReq);
+  });
+  await tx.send().wait();
+}
 
-  @method update() {
-    const currentState = this.num.get();
-    this.num.assertEquals(currentState); // precondition that links this.num.get() to the actual on-chain state
-    const newState = currentState.add(2);
-    newState.assertEquals(currentState.add(2));
-    this.num.set(newState);
+async function submitCreditProofs(
+  creditScore: Field,
+  incomeProof: IncomeHistory,
+  account: PrivateKey,
+  zkAppAddress: PublicKey,
+  zkAppPrivateKey: PrivateKey
+) {
+  let tx = await Mina.transaction(account, () => {
+    let zkApp = new MortgageZkApp(zkAppAddress);
+    zkApp.submitCreditProofs(creditScore, incomeProof);
+    zkApp.sign(zkAppPrivateKey);
+  })
+  try {
+    await tx.send().wait();
+    return true;
+  } catch (err) {
+    return false;
   }
 }
+
+
+

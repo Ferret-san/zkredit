@@ -1,4 +1,11 @@
 {
   "version": 1,
-  "networks": {}
+  "networks": {
+    "zkmortgage": {
+      "url": "https://proxy.berkeley.minaexplorer.com/graphql",
+      "keyPath": "keys/zkmortgage.json",
+      "fee": "0.1",
+      "smartContract": "MortgageZkApp"
+    }
+  }
 }

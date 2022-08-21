@@ -1,50 +1,36 @@
-import { Add } from './Add';
+import {
+  deploy,
+  submitCreditProofs,
+  createLocalBlockchain,
+  IncomeHistory,
+  MortgageZkApp
+} from './mortgage';
 import {
   isReady,
   shutdown,
   Field,
-  Mina,
   PrivateKey,
-  PublicKey,
-  Party,
+  PublicKey
 } from 'snarkyjs';
 
-/*
- * This file specifies how to test the `Add` example smart contract. It is safe to delete this file and replace 
- * with your own tests. 
- * 
- * See https://docs.minaprotocol.com/zkapps for more info.
- */
-
-function createLocalBlockchain() {
-  const Local = Mina.LocalBlockchain();
-  Mina.setActiveInstance(Local);
-  return Local.testAccounts[0].privateKey;
-}
-
-async function localDeploy(
-  zkAppInstance: Add,
-  zkAppPrivkey: PrivateKey,
-  deployerAccount: PrivateKey
-) {
-  const txn = await Mina.transaction(deployerAccount, () => {
-    Party.fundNewAccount(deployerAccount);
-    zkAppInstance.deploy({ zkappKey: zkAppPrivkey });
-    zkAppInstance.init();
-  });
-  await txn.send().wait();
-}
-
-describe('Add', () => {
-  let deployerAccount: PrivateKey,
+describe('mortgageZkApp', () => {
+  let account: PrivateKey,
     zkAppAddress: PublicKey,
-    zkAppPrivateKey: PrivateKey;
+    zkAppPrivateKey: PrivateKey,
+    zkAppInstance: MortgageZkApp;
+
+  const minCreditScore = Field(620);
+  const monthlyIncomeReq = Field(1200);
+  const creditScore = Field(700);
+  const incomeProof = new IncomeHistory(new Array(24).fill(1300));
 
   beforeEach(async () => {
     await isReady;
-    deployerAccount = createLocalBlockchain();
+    account = createLocalBlockchain();
     zkAppPrivateKey = PrivateKey.random();
     zkAppAddress = zkAppPrivateKey.toPublicKey();
+    zkAppInstance = new MortgageZkApp(zkAppAddress);
+    return;
   });
 
   afterAll(async () => {
@@ -54,23 +40,75 @@ describe('Add', () => {
     setTimeout(shutdown, 0);
   });
 
-  it('generates and deploys the `Add` smart contract', async () => {
-    const zkAppInstance = new Add(zkAppAddress);
-    await localDeploy(zkAppInstance, zkAppPrivateKey, deployerAccount);
-    const num = zkAppInstance.num.get();
-    expect(num).toEqual(Field.one);
+  it('deploys the `MortgageZkApp` smart contract', async () => {
+    await deploy(zkAppInstance, zkAppPrivateKey, minCreditScore, monthlyIncomeReq, account);
+    // await localDeploy(zkAppInstance, zkAppPrivateKey, deployerAccount);
+    // const num = zkAppInstance.num.get();
+    // expect(num).toEqual(Field.one);
   });
 
-  it('correctly updates the num state on the `Add` smart contract', async () => {
-    const zkAppInstance = new Add(zkAppAddress);
-    await localDeploy(zkAppInstance, zkAppPrivateKey, deployerAccount);
-    const txn = await Mina.transaction(deployerAccount, () => {
-      zkAppInstance.update();
-      zkAppInstance.sign(zkAppPrivateKey);
-    });
-    await txn.send().wait();
+  it('correctly submits the credit proofs to the `MortgageZkApp` smart contract', async () => {
+    await deploy(zkAppInstance, zkAppPrivateKey, minCreditScore, monthlyIncomeReq, account);
 
-    const updatedNum = zkAppInstance.num.get();
-    expect(updatedNum).toEqual(Field(3));
+    let accepted = await submitCreditProofs(
+      creditScore,
+      incomeProof,
+      account,
+      zkAppAddress,
+      zkAppPrivateKey
+    )
+    expect(accepted).toBe(true);
+  });
+
+  it('fails because the credit score is to low for the `MortgageZkApp` smart contract', async () => {
+    await deploy(zkAppInstance, zkAppPrivateKey, minCreditScore, monthlyIncomeReq, account);
+
+    const lowCreditScore = Field(600);
+    try {
+      await submitCreditProofs(
+        lowCreditScore,
+        incomeProof,
+        account,
+        zkAppAddress,
+        zkAppPrivateKey
+      )
+    } catch (e) {
+
+    }
+  });
+
+  it('fails because the income is to low for the `MortgageZkApp` smart contract', async () => {
+    await deploy(zkAppInstance, zkAppPrivateKey, minCreditScore, monthlyIncomeReq, account);
+
+    let lowIncomeProof = new IncomeHistory(new Array(24).fill(1100));
+    try {
+      await submitCreditProofs(
+        creditScore,
+        lowIncomeProof,
+        account,
+        zkAppAddress,
+        zkAppPrivateKey
+      );
+    } catch (e) {
+
+    }
+  });
+
+  it('fails to meet all the requirements for the `MortgageZkApp` smart contract', async () => {
+    await deploy(zkAppInstance, zkAppPrivateKey, minCreditScore, monthlyIncomeReq, account);
+
+    let lowCreditScore = Field(600);
+    let lowIncomeProof = new IncomeHistory(new Array(24).fill(1100));
+    try {
+      await submitCreditProofs(
+        lowCreditScore,
+        lowIncomeProof,
+        account,
+        zkAppAddress,
+        zkAppPrivateKey
+      );
+    } catch (e) {
+
+    }
   });
 });
